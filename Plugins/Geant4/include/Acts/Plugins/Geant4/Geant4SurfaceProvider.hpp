@@ -17,7 +17,7 @@
 #include "G4VPhysicalVolume.hh"
 
 namespace Acts {
-namespace Experimental {
+    namespace Experimental {
 
 /// @brief A surface provider that extracts surfaces from a gdml file
 ///
@@ -36,128 +36,124 @@ namespace Experimental {
 /// @tparam kDim The number of dimensions for the KDTree
 /// @tparam bSize The maximum number of surfaces per KDTree leaf
 /// @tparam reference_generator The reference generator for the KDTree
-template <std::size_t kDim = 2u, std::size_t bSize = 100u,
-          typename reference_generator =
-              detail::PolyhedronReferenceGenerator<1u, false>>
-class Geant4SurfaceProvider : public Acts::Experimental::ISurfacesProvider {
- public:
-  /// Nested configuration struct
-  struct Config {
-    /// The path of the gdml file
-    std::string gdmlPath = "";
+        template <std::size_t kDim = 2u, std::size_t bSize = 100u,
+                typename reference_generator =
+                detail::PolyhedronReferenceGenerator<1u, false>>
+        class Geant4SurfaceProvider : public Acts::Experimental::ISurfacesProvider {
+        public:
+            /// Nested configuration struct
+            struct Config {
+                /// Pointer to the g4World volume
+                const G4VPhysicalVolume* g4World = nullptr;
 
-    /// Convert the length scale
-    ActsScalar scaleConversion = 1.;
+                /// Convert the length scale
+                ActsScalar scaleConversion = 1.;
 
-    /// Convert the material
-    bool convertMaterial = true;
+                /// Convert the material
+                bool convertMaterial = true;
 
-    /// Converted material thickness (< 0 indicates keeping original thickness)
-    ActsScalar convertedMaterialThickness = -1;
+                /// Converted material thickness (< 0 indicates keeping original thickness)
+                ActsScalar convertedMaterialThickness = -1;
 
-    /// A selector for passive surfaces
-    std::shared_ptr<IGeant4PhysicalVolumeSelector> surfacePreselector =
-        std::make_shared<Acts::Geant4PhysicalVolumeSelectors::AllSelector>();
-  };
+                /// Transformation to apply to the
+                /// G4World volume
+                G4Transform3D worldTransform = G4Transform3D();
 
-  /// Optional configuration for the KDTree
-  struct kdtOptions {
-    /// A set of ranges to separate the surfaces
-    Acts::RangeXD<kDim, Acts::ActsScalar> range;
+                /// A selector for passive surfaces
+                std::shared_ptr<IGeant4PhysicalVolumeSelector> surfacePreselector =
+                        std::make_shared<Acts::Geant4PhysicalVolumeSelectors::AllSelector>();
+            };
 
-    /// A set of binning values to perform the separation
-    std::array<Acts::BinningValue, kDim> binningValues;
+            /// Optional configuration for the KDTree
+            struct kdtOptions {
+                /// A set of ranges to separate the surfaces
+                Acts::RangeXD<kDim, Acts::ActsScalar> range;
 
-    /// The maximum number of surfaces per leaf
-    std::size_t leafSize = bSize;
+                /// A set of binning values to perform the separation
+                std::array<Acts::BinningValue, kDim> binningValues;
 
-    /// The reference generator for the KDTree
-    reference_generator rgen;
+                /// The maximum number of surfaces per leaf
+                std::size_t leafSize = bSize;
 
-    /// Initialize range to be degenerate by default
-    kdtOptions() {
-      for (std::size_t i = 0; i < kDim; ++i) {
-        range[i].set(1, -1);
-      }
-    }
-  };
+                /// The reference generator for the KDTree
+                reference_generator rgen;
 
-  /// Constructor
-  ///@param config The configuration struct
-  ///@param options The optional configuration for KDTree
-  Geant4SurfaceProvider(const Config& config,
-                        const kdtOptions& options = kdtOptions(),
-                        bool validateGDMLschema = true) {
-    if (config.gdmlPath.empty()) {
-      throw std::invalid_argument(
-          "Geant4SurfaceProvider: no gdml file provided");
-    }
-    if (config.surfacePreselector == nullptr) {
-      throw std::invalid_argument(
-          "Geant4SurfaceProvider: no preselection criteria provided");
-    }
+                /// Initialize range to be degenerate by default
+                kdtOptions() {
+                    for (std::size_t i = 0; i < kDim; ++i) {
+                        range[i].set(1, -1);
+                    }
+                }
+            };
 
-    m_cfg = config;
-    m_kdtOptions = options;
+            /// Constructor
+            ///@param config The configuration struct
+            ///@param options The optional configuration for KDTree
+            Geant4SurfaceProvider(const Config& config,
+                                  const kdtOptions& options = kdtOptions()) {
+                if (config.g4World == nullptr) {
+                    throw std::invalid_argument(
+                            "Geant4SurfaceProvider: No World volume provided");
+                }
+                if (config.surfacePreselector == nullptr) {
+                    throw std::invalid_argument(
+                            "Geant4SurfaceProvider: no preselection criteria provided");
+                }
 
-    /// Read the gdml file and get the world volume
-    G4GDMLParser parser;
-    parser.Read(m_cfg.gdmlPath, validateGDMLschema);
-    m_g4World = parser.GetWorldVolume();
+                m_cfg = config;
+                m_kdtOptions = options;
+                m_g4World = m_cfg.g4World;
+                m_g4ToWorld = m_cfg.worldTransform;
+            };
 
-    if (m_g4World == nullptr) {
-      throw std::invalid_argument(
-          "Geant4SurfaceProvider: No g4World initialized");
-    }
-  };
+            /// Destructor
+            ~Geant4SurfaceProvider() override = default;
 
-  /// Destructor
-  ~Geant4SurfaceProvider() override = default;
+            std::vector<std::shared_ptr<Acts::Surface>> surfaces(
+                    [[maybe_unused]] const Acts::GeometryContext& gctx) const override {
+                /// Surface factory options
+                Acts::Geant4DetectorSurfaceFactory::Options g4SurfaceOptions;
 
-  std::vector<std::shared_ptr<Acts::Surface>> surfaces(
-      [[maybe_unused]] const Acts::GeometryContext& gctx) const override {
-    /// Surface factory options
-    Acts::Geant4DetectorSurfaceFactory::Options g4SurfaceOptions;
+                /// Copy the configuration
+                /// This is done to avoid checking nullptrs
+                /// in the factory
+                g4SurfaceOptions.scaleConversion = m_cfg.scaleConversion;
+                g4SurfaceOptions.convertMaterial = m_cfg.convertMaterial;
+                g4SurfaceOptions.convertedMaterialThickness =
+                        m_cfg.convertedMaterialThickness;
+                g4SurfaceOptions.passiveSurfaceSelector = m_cfg.surfacePreselector;
 
-    /// Copy the configuration
-    /// This is done to avoid checking nullptrs
-    /// in the factory
-    g4SurfaceOptions.scaleConversion = m_cfg.scaleConversion;
-    g4SurfaceOptions.convertMaterial = m_cfg.convertMaterial;
-    g4SurfaceOptions.convertedMaterialThickness =
-        m_cfg.convertedMaterialThickness;
-    g4SurfaceOptions.passiveSurfaceSelector = m_cfg.surfacePreselector;
+                /// Generate the surface cache
+                Acts::Geant4DetectorSurfaceFactory::Cache g4SurfaceCache;
 
-    /// Generate the surface cache
-    Acts::Geant4DetectorSurfaceFactory::Cache g4SurfaceCache;
-    G4Transform3D g4ToWorld;
+                /// Find and store surfaces in the cache object
+                Acts::Geant4DetectorSurfaceFactory{}.construct(
+                        g4SurfaceCache, m_g4ToWorld, *m_g4World, g4SurfaceOptions);
 
-    /// Find and store surfaces in the cache object
-    Acts::Geant4DetectorSurfaceFactory{}.construct(
-        g4SurfaceCache, g4ToWorld, *m_g4World, g4SurfaceOptions);
+                auto surfaces = g4SurfaceCache.passiveSurfaces;
 
-    auto surfaces = g4SurfaceCache.passiveSurfaces;
+                /// If range is degenerate, return all surfaces
+                if (m_kdtOptions.range.degenerate()) {
+                    return surfaces;
+                }
 
-    /// If range is degenerate, return all surfaces
-    if (m_kdtOptions.range.degenerate()) {
-      return surfaces;
-    }
+                /// Otherwise, select the surfaces based on the range
+                auto kdtSurfaces =
+                        Acts::Experimental::KdtSurfaces<kDim, bSize, reference_generator>(
+                                gctx, surfaces, m_kdtOptions.binningValues);
 
-    /// Otherwise, select the surfaces based on the range
-    auto kdtSurfaces =
-        Acts::Experimental::KdtSurfaces<kDim, bSize, reference_generator>(
-            gctx, surfaces, m_kdtOptions.binningValues);
+                return kdtSurfaces.surfaces(m_kdtOptions.range);
+            };
 
-    return kdtSurfaces.surfaces(m_kdtOptions.range);
-  };
+        private:
+            Config m_cfg;
 
- private:
-  Config m_cfg;
+            kdtOptions m_kdtOptions;
 
-  kdtOptions m_kdtOptions;
+            const G4VPhysicalVolume* m_g4World;
 
-  G4VPhysicalVolume* m_g4World = nullptr;
-};
+            G4Transform3D m_g4ToWorld;
+        };
 
-}  // namespace Experimental
+    }  // namespace Experimental
 }  // namespace Acts

@@ -20,6 +20,8 @@
 #include <optional>
 #include <vector>
 
+#include <iostream>
+
 namespace Acts {
 
 class InterpolatedMagneticField : public MagneticFieldProvider {
